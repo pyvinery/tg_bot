@@ -79,19 +79,65 @@ async def search_videos_by_title(query):
     return results
 
 
+# Video selection based on a search query
+video_refs = {}
+
+
 @dp.message_handler(regexp='(?i).*')
 async def handle_text(message: types.Message):
-    search_query = message.text.strip()
-    if search_query:
-        search_results = await search_videos_by_title(search_query)
-        if search_results:
-            first_result_title, first_result_file_id = search_results[0]
-            await bot.send_video(message.from_user.id, first_result_file_id, caption=f"Нашел видео: {first_result_title}")
+    search_query = message.text.strip().lower()
+    # Сохраняем запрос пользователя
+    await save_user_query(user_id=message.from_user.id, query=search_query)
+    search_query = message.text.strip().lower()
+    search_results = await search_videos_by_title(search_query)
+
+    if search_results:
+        if len(search_results) == 1:
+            # If there is only one result, send it immediately.
+            _, file_id = search_results[0]
+            await bot.send_video(message.from_user.id, file_id)
         else:
-            await message.reply("Видео по запросу не найдены.")
+            # If there are multiple results, send a selection keyboard.
+            keyboard = InlineKeyboardMarkup()
+            for title, file_id in search_results:
+                # Create a unique reference ID for the file_id
+                ref_id = str(len(video_refs) + 1)
+                video_refs[ref_id] = file_id  # Map ref_id to file_id
+                # Ensure the callback data does not exceed 64 bytes.
+                callback_data = f"video_{ref_id}" if len(f"video_{ref_id}") <= 64 else f"video_{ref_id[:60]}"
+                keyboard.add(InlineKeyboardButton(text=title, callback_data=callback_data))
+            await bot.send_message(message.from_user.id, "Выберите видео:", reply_markup=keyboard)
+    else:
+        await message.reply("Видео по запросу не найдены.")
 
 
-#база данных
+@dp.callback_query_handler(lambda c: c.data.startswith('video_'))
+async def handle_video_choice(callback_query: types.CallbackQuery):
+    ref_id = callback_query.data.split('_')[1]
+    file_id = video_refs.get(ref_id)
+    if file_id:
+        await bot.send_video(callback_query.from_user.id, file_id)
+    else:
+        await callback_query.answer("Ошибка: видео не найдено!")
+
+    await callback_query.answer()
+
+
+# A stub function for shortening your file_id or retrieving it based on a short ID
+def create_short_id_for(file_id):
+    # This should create a shorter version of the file_id or hash it and return
+    # Hashing is one approach but it requires a way to resolve hash back to file_id
+    # TODO: Implement this function
+    pass
+
+
+def lookup_file_id_from_short_id(short_id):
+    # This should take the short ID and return the corresponding file_id
+    # TODO: Implement this function
+    pass
+
+
+#база данных видео
 
 async def init_db(db_name="bot.db"):
     async with aiosqlite.connect(db_name) as db:
@@ -99,6 +145,24 @@ async def init_db(db_name="bot.db"):
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             title TEXT NOT NULL,
                             file_id TEXT NOT NULL)""")
+        await db.commit()
+#база данных запросов
+async def init_db(db_name="bot.db"):
+    async with aiosqlite.connect(db_name) as db:
+        await db.execute("""CREATE TABLE IF NOT EXISTS videos (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            title TEXT NOT NULL,
+                            file_id TEXT NOT NULL)""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS user_queries (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            query TEXT NOT NULL,
+                            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
+        await db.commit()
+
+async def save_user_query(user_id, query):
+    async with aiosqlite.connect('bot.db') as db:
+        await db.execute("INSERT INTO user_queries (user_id, query) VALUES (?, ?)", (user_id, query))
         await db.commit()
 
 
@@ -123,7 +187,5 @@ if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.run_until_complete(init_db())  # Инициализация базы данных перед запуском бота
     executor.start_polling(dp, skip_updates=True)
-
-
 
 
