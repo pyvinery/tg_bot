@@ -1,3 +1,4 @@
+import asyncio
 import os
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
@@ -60,66 +61,69 @@ async def help_command(message: types.Message):
     await message.answer(help_text)
 
 
-@dp.message_handler(regexp='(?i).*')
-async def handle_text(message: types.Message):
-    user_subscribed = await is_user_subscribed(message.from_user.id)
-    if not user_subscribed:
-        await send_subscribe_message(message.from_user.id)
-        return
-
-    search_query = message.text.strip()
-    if search_query:
-        await search_videos(message, search_query)
-
 
 # видео
-def is_video_file(file_name):
-    video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
-    return file_name.lower().endswith(video_extensions)
+# Глобальный список или структура данных для хранения file_id видео
+video_file_ids = {}
 
-def find_videos_by_name(folder_path, query):
-    videos_list = []
-    for file_name in os.listdir(folder_path):
-        if query.lower() in file_name.lower() and is_video_file(file_name):
-            videos_list.append(file_name)
-    return videos_list
+@dp.channel_post_handler(content_types=['video'])
+async def handle_channel_video(message: types.Message):
+    video_file_id = message.video.file_id
+    video_title = message.caption or 'Без названия'
+    await save_video_file_id(video_title, video_file_id)
 
 
-async def search_videos(message: types.Message, search_query: str):
-    folder_path = 'D:\\общее\\проект тг фильмы'
-    videos = find_videos_by_name(folder_path, search_query)
-
-    if videos:
-        #  клавиатура с кнопками
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        for video_file in videos:
-            video_name, _ = os.path.splitext(video_file)  # название видео
-            callback_data = f'video_{video_file}'
-            keyboard.add(InlineKeyboardButton(text=video_name, callback_data=callback_data))  # текст кнопки
-        await message.answer("Выберите видео:", reply_markup=keyboard)
-    else:
-        await message.reply("Видео по запросу не найдены.")
+async def search_videos_by_title(query):
+    # Поиск похожих видео по запросу (предполагается, что названия видео уникальны)
+    results = {title: file_id for title, file_id in video_file_ids.items() if query.lower() in title.lower()}
+    return results
 
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith('video_'))
-async def send_video_callback_query(callback_query: types.CallbackQuery):
-    video_name_with_extension = callback_query.data[len('video_'):]
-    video_name, _ = os.path.splitext(video_name_with_extension)
-    folder_path = 'D:\\общее\\проект тг фильмы'
-    video_path = os.path.join(folder_path, video_name_with_extension)
-    if os.path.exists(video_path) and os.path.isfile(video_path):
-        with open(video_path, 'rb') as video:
-            await bot.send_video(callback_query.from_user.id, video, caption=f"Видео: {video_name}")
-    else:
-        await bot.answer_callback_query(callback_query.id, text="Ошибка: видео не найдено.")
-    # удаляем клавиатуру после выбора видео
-    await bot.edit_message_reply_markup(callback_query.from_user.id, callback_query.message.message_id)
+@dp.message_handler(regexp='(?i).*')
+async def handle_text(message: types.Message):
+    search_query = message.text.strip()
+    if search_query:
+        search_results = await search_videos_by_title(search_query)
+        if search_results:
+            first_result_title, first_result_file_id = search_results[0]
+            await bot.send_video(message.from_user.id, first_result_file_id, caption=f"Нашел видео: {first_result_title}")
+        else:
+            await message.reply("Видео по запросу не найдены.")
+
+
+#база данных
+
+async def init_db(db_name="bot.db"):
+    async with aiosqlite.connect(db_name) as db:
+        await db.execute("""CREATE TABLE IF NOT EXISTS videos (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            title TEXT NOT NULL,
+                            file_id TEXT NOT NULL)""")
+        await db.commit()
+
+
+# Сохранение file_id видео
+async def save_video_file_id(title, file_id):
+    async with aiosqlite.connect('bot.db') as db:
+        await db.execute("INSERT INTO videos (title, file_id) VALUES (?, ?)", (title, file_id))
+        await db.commit()
+
+# Поиск видео по запросу
+async def search_videos_by_title(query):
+    async with aiosqlite.connect('bot.db') as db:
+        cursor = await db.execute("SELECT title, file_id FROM videos WHERE title LIKE ?", (f"%{query}%",))
+        return await cursor.fetchall()
+
+
 
 
 
 # запускаем бота
 if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())  # Инициализация базы данных перед запуском бота
     executor.start_polling(dp, skip_updates=True)
+
 
 
 
