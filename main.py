@@ -9,34 +9,71 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from my_token import TOKEN
 from aiogram.utils.exceptions import ChatNotFound
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+
+
+
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+
+# Создание состояний для процесса оставления отзыва
 
 
 
 CHANNEL_ID = '@gggggjjkkuytr'  # ID  канала
+CHANNEL_link = '@film_vse_tg'
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
-
-
+dp = Dispatcher(bot, storage=MemoryStorage())  # Использование MemoryStorage для хранения состояний
 
 # Проверка подписки
 async def is_user_subscribed(user_id):
     try:
-        member_status = await bot.get_chat_member(CHANNEL_ID, user_id)
-        return member_status.is_chat_member() or member_status.status in ['administrator', 'creator', 'member']
+        member_status = await bot.get_chat_member(CHANNEL_link, user_id)
+        return member_status.status in ['administrator', 'creator', 'member']
     except ChatNotFound:
+        return False
+    except Exception as e:
+        print(e)  # Логируем ошибку, чтобы увидеть, если есть что-то необычное
         return False
 
 async def send_subscribe_message(user_id):
     keyboard = InlineKeyboardMarkup()
-    subscribe_button = InlineKeyboardButton(text="Подписаться на канал", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")
+    subscribe_button = InlineKeyboardButton(text="Подписаться на канал", url=f"https://t.me/{CHANNEL_link.lstrip('@')}")
     keyboard.add(subscribe_button)
     await bot.send_message(user_id, "Пожалуйста, подпишитесь на наш канал чтобы использовать этого бота.", reply_markup=keyboard)
 
-
-
 # команды
+
+class Feedback(StatesGroup):
+    waiting_for_feedback = State()
+
+# Изменение обработчика команды /feedback, чтобы установить состояние ожидания отзыва
+@dp.message_handler(commands=['feedback'], state='*')
+async def feedback_command(message: types.Message, state: FSMContext):
+    await message.answer("Пожалуйста, напишите свой отзыв после этого сообщения.")
+    await Feedback.waiting_for_feedback.set()
+
+# Изменение обработчика текстовых сообщений, чтобы принимать отзывы, если бот находится в соответствующем состоянии
+@dp.message_handler(state=Feedback.waiting_for_feedback, content_types=types.ContentTypes.TEXT)
+async def process_feedback(message: types.Message, state: FSMContext):
+    feedback_content = message.text
+    user_id = message.from_user.id
+    await save_feedback(user_id, feedback_content)
+    await state.finish()  # Выходим из состояния ожидания отзыва
+    await message.answer("Спасибо за Ваш отзыв!")
+
+@dp.message_handler(lambda message: message.reply_to_message and message.reply_to_message.text.startswith("Пожалуйста, напишите свой отзыв"), content_types=types.ContentTypes.TEXT)
+async def process_feedback(message: types.Message):
+    user_id = message.from_user.id
+    feedback_content = message.text
+    await save_feedback(user_id, feedback_content)
+    await message.answer("Спасибо за Ваш отзыв!")
+
+
+
 @dp.message_handler(commands=['start', 'help'])
 async def commands_handler(message: types.Message):
     user_subscribed = await is_user_subscribed(message.from_user.id)
@@ -45,10 +82,9 @@ async def commands_handler(message: types.Message):
         return
 
     if message.text.startswith('/start'):
-        await message.answer("Привет! Просто напиши мне что-нибудь и я найду для тебя видео.")
+        await message.answer("Привет! Просто напиши мне названия фильма или сериала и я найду для тебя его.")
     elif message.text.startswith('/help'):
         await help_command(message)
-
 
 @dp.message_handler(commands=['help'])
 async def help_command(message: types.Message):
@@ -60,8 +96,6 @@ async def help_command(message: types.Message):
     )
     await message.answer(help_text)
 
-
-
 # видео
 # Глобальный список или структура данных для хранения file_id видео
 video_file_ids = {}
@@ -72,25 +106,28 @@ async def handle_channel_video(message: types.Message):
     video_title = message.caption or 'Без названия'
     await save_video_file_id(video_title, video_file_id)
 
-
 async def search_videos_by_title(query):
-    # Поиск похожих видео по запросу (предполагается, что названия видео уникальны)
-    results = {title: file_id for title, file_id in video_file_ids.items() if query.lower() in title.lower()}
-    return results
+    # Query the database for video titles like the search query
+    async with aiosqlite.connect('bot.db') as db:
+        cursor = await db.execute("SELECT title, file_id FROM videos WHERE title LIKE ?", (f"%{query}%",))
+        result = await cursor.fetchall()
+        return [(title, file_id) for title, file_id in result]
 
 
 # Video selection based on a search query
 video_refs = {}
 
-
 @dp.message_handler(regexp='(?i).*')
 async def handle_text(message: types.Message):
+    user_subscribed = await is_user_subscribed(message.from_user.id)  # Проверяем подписку пользователя
+    if not user_subscribed:  # Если пользователь не подписан на канал
+        await send_subscribe_message(message.from_user.id)  # Просим подписаться
+        return  # Выходим из функции, не продолжая дальнейшие действия
+
     search_query = message.text.strip().lower()
     # Сохраняем запрос пользователя
     await save_user_query(user_id=message.from_user.id, query=search_query)
-    search_query = message.text.strip().lower()
     search_results = await search_videos_by_title(search_query)
-
     if search_results:
         if len(search_results) == 1:
             # If there is only one result, send it immediately.
@@ -110,7 +147,6 @@ async def handle_text(message: types.Message):
     else:
         await message.reply("Видео по запросу не найдены.")
 
-
 @dp.callback_query_handler(lambda c: c.data.startswith('video_'))
 async def handle_video_choice(callback_query: types.CallbackQuery):
     ref_id = callback_query.data.split('_')[1]
@@ -122,7 +158,6 @@ async def handle_video_choice(callback_query: types.CallbackQuery):
 
     await callback_query.answer()
 
-
 # A stub function for shortening your file_id or retrieving it based on a short ID
 def create_short_id_for(file_id):
     # This should create a shorter version of the file_id or hash it and return
@@ -130,25 +165,16 @@ def create_short_id_for(file_id):
     # TODO: Implement this function
     pass
 
-
 def lookup_file_id_from_short_id(short_id):
     # This should take the short ID and return the corresponding file_id
     # TODO: Implement this function
     pass
 
-
 #база данных видео
 
-async def init_db(db_name="bot.db"):
-    async with aiosqlite.connect(db_name) as db:
-        await db.execute("""CREATE TABLE IF NOT EXISTS videos (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            title TEXT NOT NULL,
-                            file_id TEXT NOT NULL)""")
-        await db.commit()
 #база данных запросов
-async def init_db(db_name="bot.db"):
-    async with aiosqlite.connect(db_name) as db:
+async def init_db():
+    async with aiosqlite.connect('bot.db') as db:
         await db.execute("""CREATE TABLE IF NOT EXISTS videos (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             title TEXT NOT NULL,
@@ -158,7 +184,31 @@ async def init_db(db_name="bot.db"):
                             user_id INTEGER NOT NULL,
                             query TEXT NOT NULL,
                             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS feedback (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            content TEXT NOT NULL,
+                            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
         await db.commit()
+
+# Обработчик команды feedback
+@dp.message_handler(commands=['feedback'])
+async def feedback_handler(message: types.Message):
+    await message.answer("Пожалуйста, оставьте свой отзыв сообщением.")
+
+@dp.message_handler(lambda message: message.reply_to_message and message.reply_to_message.text.startswith("Пожалуйста, оставьте свой отзыв сообщением."), content_types=types.ContentTypes.TEXT)
+async def process_feedback(message: types.Message):
+    user_id = message.from_user.id
+    feedback_content = message.text
+    await save_feedback(user_id, feedback_content)
+    await message.answer("Спасибо за Ваш отзыв!")
+
+# Функция сохранения отзыва в базу данных
+async def save_feedback(user_id, content):
+    async with aiosqlite.connect('bot.db') as db:
+        await db.execute("INSERT INTO feedback (user_id, content) VALUES (?, ?)", (user_id, content))
+        await db.commit()
+
 
 async def save_user_query(user_id, query):
     async with aiosqlite.connect('bot.db') as db:
@@ -179,13 +229,8 @@ async def search_videos_by_title(query):
         return await cursor.fetchall()
 
 
-
-
-
 # запускаем бота
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.run_until_complete(init_db())  # Инициализация базы данных перед запуском бота
-    executor.start_polling(dp, skip_updates=True)
-
-
+    executor.start_polling(dp, skip_updates=False)
