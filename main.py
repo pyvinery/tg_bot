@@ -15,8 +15,6 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # Создание состояний для процесса оставления отзыва
-
-
 CHANNEL_ID = '@gggggjjkkuytr'  # ID  канала
 CHANNEL_link = '@film_vse_tg'
 
