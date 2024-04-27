@@ -1,4 +1,7 @@
 import asyncio
+import json
+
+import requests
 import os
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
@@ -13,10 +16,11 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from kinopoisk.movie import Movie
 
 # Создание состояний для процесса оставления отзыва
 CHANNEL_ID = '@gggggjjkkuytr'  # ID  канала
-CHANNEL_link = '@film_vse_tg'
+CHANNEL_link = '@vse_film_tg'
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
@@ -45,6 +49,15 @@ async def send_subscribe_message(user_id):
 
 
 # команды
+
+@dp.message_handler(commands=['rating'], state='*')
+async def feedback_command(message: types.Message, state: FSMContext):
+    # await message.answer("")
+    await rating_handler(message)
+
+
+
+
 
 class Feedback(StatesGroup):
     waiting_for_feedback = State()
@@ -223,6 +236,14 @@ async def process_feedback(message: types.Message):
     await message.answer("Спасибо за Ваш отзыв!")
 
 
+# Функция для получения рейтинга фильма с Кинопоиска
+"""movie_search = Movie.objects.search("название фильма")
+print(movie_search.rating)"""
+
+
+# Функция для получения рейтинга фильма с Кинопоиска
+
+
 # Функция сохранения отзыва в базу данных
 async def save_feedback(user_id, content):
     async with aiosqlite.connect('bot.db') as db:
@@ -248,6 +269,44 @@ async def search_videos_by_title(query):
     async with aiosqlite.connect('bot.db') as db:
         cursor = await db.execute("SELECT title, file_id FROM videos WHERE title LIKE ?", (f"%{query}%",))
         return await cursor.fetchall()
+
+
+def get_kinopoisk_rating(movie_name):
+
+    # ищем фильм
+    movie_search = Movie.objects.search(movie_name)
+
+    # берем первый результат
+    movie_search = movie_search[0]
+
+    # получаем рейтинг фильма
+    rating = movie_search.rating
+
+    # округляем рейтинг до 1 знака песле запятой
+    rating = round(rating, 1)
+
+    # Возвращаем рейтинг.
+    return rating
+
+
+# Обработчик команды `rating`
+@dp.message_handler(commands=['rating'])
+async def rating_handler(message: types.Message):
+
+    # Извлекаем название фильма из сообщения.
+    movie_name = message.text[8:]
+
+    # Получаем рейтинг фильма с Кинопоиска.
+    rating = get_kinopoisk_rating(movie_name)
+
+    # Формируем ответ.
+    if rating is not None:
+        response = f"Рейтинг фильма \"{movie_name}\" на Кинопоиске: {rating}"
+    else:
+        response = f"Фильм {movie_name} не найден на Кинопоиске."
+
+    # Отправляем ответ пользователю.
+    await message.answer(response)
 
 
 # запускаем бота
