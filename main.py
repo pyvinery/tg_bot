@@ -3,6 +3,9 @@ import json
 
 import requests
 import os
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.ext.declarative import declarative_base
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
@@ -33,8 +36,16 @@ class Rating(StatesGroup):
     waiting_for_movie_name = State()  # состояние ожидания ввода названия фильма
 
 
+class About(StatesGroup):
+    waiting_for_movie_name = State()
+
+
 class Feedback(StatesGroup):
     waiting_for_feedback = State()
+
+
+class Note(StatesGroup):
+    waiting_for_note = State()
 
 
 class Video:
@@ -63,13 +74,68 @@ async def send_subscribe_message(user_id):
                            reply_markup=keyboard)
 
 
-# команды
-
 @dp.message_handler(commands=['rating'], state='*')
 async def rating_command(message: types.Message, state: FSMContext):
     await message.answer("Введите название фильма, чтобы получить его рейтинг.")
     # Переходим в состояние oжидания ввода названия фильма
     await Rating.waiting_for_movie_name.set()
+
+
+# Create the SQLAlchemy engine.
+engine = create_engine("sqlite:///notes.db")
+
+# Create the SQLAlchemy session.
+Session = sessionmaker(bind=engine)
+session = Session()
+
+# Define the Note model.
+Base = declarative_base()
+
+
+class Note_create(Base):
+    __tablename__ = 'notes'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer)
+    note_text = Column(String)
+
+
+# Create the notes table.
+Base.metadata.create_all(engine)
+
+
+@dp.message_handler(commands=['save_note'], state='*')
+async def note_command(message: types.Message, state: FSMContext):
+    await message.answer("Напишите свою заметку.")
+    await Note.waiting_for_note.set()
+
+
+async def save_note(user_id, note_text):
+    # Create a new Note object.
+    note = Note_create(user_id=user_id, note_text=note_text)
+
+    # Add the Note object to the session.
+    session.add(note)
+
+    # Commit the changes to the database.
+    session.commit()
+
+
+@dp.message_handler(commands=['note'])
+async def note_command(message: types.Message):
+    notes = session.query(Note_create).filter(Note_create.user_id == message.from_user.id).all()
+    note_texts = [note.note_text for note in notes]
+    await message.answer("Ваши заметки:\n\n")
+    await message.answer("\n\n".join(note_texts))
+
+
+# Изменение обработчика текстовых сообщений, чтобы принимать отзывы, если бот находится в соответствующем состоянии
+@dp.message_handler(state=Note.waiting_for_note, content_types=types.ContentTypes.TEXT)
+async def process_note(message: types.Message, state: FSMContext):
+    note_content = message.text
+    user_id = message.from_user.id
+    await save_note(user_id, note_content)
+    await state.finish()  # Выходим из состояния ожидания отзыва
+    await message.answer("Спасибо за Вашу заметку!")
 
 
 @dp.message_handler(commands=['films'], state='*')
