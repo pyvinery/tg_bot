@@ -1,15 +1,12 @@
 import asyncio
-import json
+import random
 
-import requests
-import os
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
-from aiogram.dispatcher.filters import Text
 from aiogram import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
@@ -33,7 +30,8 @@ series_episodes = {}
 
 # Создаем новую группу состояний
 class Rating(StatesGroup):
-    waiting_for_movie_name = State()  # состояние ожидания ввода названия фильма
+    # состояние ожидания ввода названия фильма
+    waiting_for_movie_name = State()
 
 
 class About(StatesGroup):
@@ -67,6 +65,7 @@ async def is_user_subscribed(user_id):
 
 
 async def send_subscribe_message(user_id):
+    # Отправляет сообщение с просьбой подписаться на канал.
     keyboard = InlineKeyboardMarkup()
     subscribe_button = InlineKeyboardButton(text="Подписаться на канал", url=f"https://t.me/{CHANNEL_link.lstrip('@')}")
     keyboard.add(subscribe_button)
@@ -122,6 +121,10 @@ async def save_note(user_id, note_text):
 
 @dp.message_handler(commands=['note'])
 async def note_command(message: types.Message):
+    # Обработчик команды '/note'.
+
+    # Извлекает и отображает все заметки пользователя.
+
     notes = session.query(Note_create).filter(Note_create.user_id == message.from_user.id).all()
     note_texts = [note.note_text for note in notes]
     await message.answer("Ваши заметки:\n\n")
@@ -138,8 +141,27 @@ async def process_note(message: types.Message, state: FSMContext):
     await message.answer("Спасибо за Вашу заметку!")
 
 
+@dp.message_handler(commands=['random'])
+async def random_movie(message: types.Message):
+    """Выводит случайный фильм из базы данных и отправляет его пользователю."""
+
+    # Получаем список всех видео из базы данных
+    videos = await get_all_videos()
+
+    # Выбираем случайный фильм
+    random_video = random.choice(videos)
+
+    # Отправляем название фильма и сам фильм пользователю
+    await message.answer(random_video.title)
+    await bot.send_video(message.from_user.id, random_video.file_id)
+
+
 @dp.message_handler(commands=['films'], state='*')
 async def feedback_command(message: types.Message, state: FSMContext):
+    # Обработчик команды '/films'.
+
+    # Переключает состояние в состояние 'films' и вызывает обработчик для этого состояния.
+
     # await message.answer("")
     await films_handler(message)
 
@@ -164,6 +186,9 @@ async def process_feedback(message: types.Message, state: FSMContext):
 @dp.message_handler(lambda message: message.reply_to_message and message.reply_to_message.text.startswith(
     "Пожалуйста, напишите свой отзыв"), content_types=types.ContentTypes.TEXT)
 async def process_feedback(message: types.Message):
+    # Обработчик сообщений, являющихся ответами на сообщение с текстом "Пожалуйста, напишите свой отзыв".
+
+    # Сохраняет отзыв пользователя и отправляет ответное сообщение с благодарностью.
     user_id = message.from_user.id
     feedback_content = message.text
     await save_feedback(user_id, feedback_content)
@@ -172,6 +197,11 @@ async def process_feedback(message: types.Message):
 
 @dp.message_handler(commands=['start', 'help'])
 async def commands_handler(message: types.Message):
+    # Обработчик команд '/start' и '/help'.
+
+    # Проверяет подписку пользователя, отправляет сообщение с предложением подписаться, если пользователь не подписан,
+    # и вызывает обработчики для команд '/start' и '/help'.
+
     user_subscribed = await is_user_subscribed(message.from_user.id)
     if not user_subscribed:
         await send_subscribe_message(message.from_user.id)
@@ -185,6 +215,9 @@ async def commands_handler(message: types.Message):
 
 @dp.message_handler(commands=['help'])
 async def help_command(message: types.Message):
+    # Обработчик команды '/help'.
+
+    # Отправляет пользователю сообщение с информацией о доступных командах.
     help_text = (
         "Вот что я умею делать:\n"
         "\n"
@@ -192,9 +225,15 @@ async def help_command(message: types.Message):
         "\n"
         "/feedback - оставить отзыв о работе бота\n"
         "\n"
-        "/rating - узнать рейтинг фильма\n"
+        "/rating - узнать рейтинг фильма/сериала\n"
         "\n"
-        "/films - список доступных для просмотра фильмов\n"
+        "/films - список доступных для просмотра фильмов/сериалов\n"
+        "\n"
+        "/save_note - записать в заметки\n"
+        "\n"
+        "/note - увидеть свои заметки\n"
+        "\n"
+        "/random - рандомный выбор фильма/сериала\n"
         "\n"
         "/help - информация о командах\n"
         "\n"
@@ -210,6 +249,9 @@ video_file_ids = {}
 
 @dp.channel_post_handler(content_types=['video'])
 async def handle_channel_video(message: types.Message):
+    # Обработчик видео-сообщений в канале.
+
+    # Сохраняет идентификатор видеофайла и заголовок видео в базу данных.
     video_file_id = message.video.file_id
     video_title = message.caption or 'Без названия'
     await save_video_file_id(video_title, video_file_id)
@@ -260,6 +302,9 @@ async def handle_text(message: types.Message):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('video_'))
 async def handle_video_choice(callback_query: types.CallbackQuery):
+    # Обработчик выбора видео.
+
+    # Извлекает идентификатор видеофайла из данных обратного вызова и отправляет видео пользователю.
     ref_id = callback_query.data.split('_')[1]
     file_id = video_refs.get(ref_id)
     if file_id:
@@ -327,6 +372,7 @@ async def save_feedback(user_id, content):
         await db.commit()
 
 
+# Сохраняет запрос пользователя в базу данных.
 async def save_user_query(user_id, query):
     async with aiosqlite.connect('bot.db') as db:
         await db.execute("INSERT INTO user_queries (user_id, query) VALUES (?, ?)", (user_id, query))
@@ -347,6 +393,7 @@ async def search_videos_by_title(query):
         return await cursor.fetchall()
 
 
+# Получает все видео из базы данных.
 async def get_all_videos():
     async with aiosqlite.connect('bot.db') as db:
         cursor = await db.execute("SELECT title, file_id FROM videos")
@@ -440,6 +487,8 @@ async def series_handler(message: types.Message):
 
 
 def group_videos_by_basename(videos):
+    # Группирует видео по базовому имени.
+    # Базовое имя видео определяется как последовательность слов до первого числа в названии.
     video_groups = {}
     for video in videos:
         words = video.title.split(' ')
