@@ -486,6 +486,19 @@ async def series_handler(message: types.Message):
     await message.answer("Выберите эпизод:", reply_markup=keyboard)
 
 
+# After a user selects an episode, send the corresponding video.
+# After a user selects an episode, send the corresponding video.
+@dp.message_handler(lambda message: message.text in series_episodes[series_title])
+async def episode_handler(message: types.Message):
+    episode_title = message.text
+    for video in videos:
+        if video.title == episode_title:
+            await bot.send_video(message.from_user.id, video.file_id)
+            break
+    else:
+        await message.answer("Эпизод не найден.")
+
+
 def group_videos_by_basename(videos):
     # Группирует видео по базовому имени.
     # Базовое имя видео определяется как последовательность слов до первого числа в названии.
